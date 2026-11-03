@@ -52,6 +52,10 @@ classDiagram
     }
 
     namespace Execution {
+        class ModelProvider {
+            <<interface>>
+            +generateResponse(prompt: String, variables: Map) String
+        }
         class IEvalRunner {
             <<interface>>
             +run(suite: ITestSuite, provider: ModelProvider) IEvalRun
@@ -107,6 +111,7 @@ classDiagram
     ITestSuite "1" *-- "1..*" ITestCase : tests
     ITestCase "1" *-- "1..*" Expectation : expectations
     IEvalRunner ..> ITestSuite : reads definitions
+    IEvalRunner ..> ModelProvider : generates responses
     IEvalRunner ..> IEvalRun : creates and returns
     IEvalRun "1" *-- "1..*" IEvalResult : results
     IEvalResult "1" *-- "0..*" EvalScore : scores
