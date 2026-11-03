@@ -9,7 +9,7 @@ Only essential fields and operations are shown. The [requirements](./requirement
 | Subsystem | Public entry points | Output |
 |---|---|---|
 | Test creation | `ITestCaseBuilder`, `ITestSuite` | A configured `ITestSuite`. |
-| Execution | `IEvalRunner.run(suite, provider)` | A completed `IEvalRun`, including results and scores. |
+| Execution | `IEvalRunner.run(suite, model)` | A completed `IEvalRun`, including results and scores. |
 | Reporting | `IReportGenerator.generate(run)` | An `IEvalReport` with the results and overall judgment. |
 | Exporting | `ISuiteExporter.exportSuite(suite, runs)` | A JSON string containing the suite, tests and run/result history. |
 
@@ -54,11 +54,17 @@ classDiagram
     namespace Execution {
         class ModelProvider {
             <<interface>>
-            +generateResponse(prompt: String, variables: Map) String
+            +getModel(modelName: String) Model
+        }
+        class Model {
+            <<interface>>
+            +providerName: String
+            +modelName: String
+            +generateResponse(prompt: String, variables: Map) Promise~String~
         }
         class IEvalRunner {
             <<interface>>
-            +run(suite: ITestSuite, provider: ModelProvider) IEvalRun
+            +run(suite: ITestSuite, model: Model) Promise~IEvalRun~
         }
         class IEvalRun {
             <<interface>>
@@ -111,7 +117,8 @@ classDiagram
     ITestSuite "1" *-- "1..*" ITestCase : tests
     ITestCase "1" *-- "1..*" Expectation : expectations
     IEvalRunner ..> ITestSuite : reads definitions
-    IEvalRunner ..> ModelProvider : generates responses
+    ModelProvider ..> Model : supplies selected model
+    IEvalRunner ..> Model : generates responses
     IEvalRunner ..> IEvalRun : creates and returns
     IEvalRun "1" *-- "1..*" IEvalResult : results
     IEvalResult "1" *-- "0..*" EvalScore : scores
@@ -139,7 +146,7 @@ Concrete domain classes explicitly implement these contracts:
 ### Responsibilities and dependency direction
 
 - **Test creation:** the builder validates a test and assigns its UUID; `suite.addTest(test)` assembles the suite. `TestCase` defines input and criteria and has no `run` method. This subsystem knows no providers, runners or reports.
-- **Execution:** `EvalRunner` coordinates the suite. For each test it calls the provider, creates an `EvalResult`, applies every configured evaluator to a successful output, adds the returned scores and stores the result in `EvalRun`. It returns the completed run and knows no report classes. `EvalRun` records execution data and provides `addResult`; it does not execute tests.
+- **Execution:** `EvalRunner` coordinates the suite. The application obtains a `Model` through `ModelProvider.getModel(modelName)` and passes it to `run(suite, model)`. For each test the runner awaits the model response, creates an `EvalResult`, awaits every configured evaluator on a successful output, adds the returned scores and stores the result in `EvalRun`. It returns the completed run and knows no report classes. `EvalRun` records execution data and provides `addResult`; it does not execute tests.
 - **Reporting:** `ReportGenerator` reads the completed run, delegates the overall calculation to `OverallScoreEvaluator`, and creates `EvalReport`. The application supplies that strategy to the generator at construction. `EvalReport` is the final report object; it does not generate itself. This subsystem knows no runner, builder or provider implementations.
 - **Exporting:** `JsonSuiteExporter` reads `ITestSuite` and its related `IEvalRun` objects and returns JSON containing the suite, tests, expectations, runs, results and scores. The caller retrieves the suite and its complete stored run history, which may be empty, and supplies them to `exportSuite`. Exporting is independent of execution and report generation and has no dependency on `EvalRunner` or `ReportGenerator`. The web interface handles downloading the returned JSON.
 
@@ -151,7 +158,7 @@ The report reads the run's results instead of copying them. Historical results r
 
 ### Test inputs and expectations
 
-`ITestCase.variables` supplies values for placeholders in the prompt. `goldenReference` is the expected reference answer; `rubric` describes judgment criteria, for example for an LLM judge. The provider receives the prompt and variables; evaluators read the reference and rubric when needed. The builder checks that the selected expectations have their required criteria before creating the test.
+`ITestCase.variables` supplies values for placeholders in the prompt. `goldenReference` is the expected reference answer; `rubric` describes judgment criteria, for example for an LLM judge. The selected model receives the prompt and variables unchanged; its adapter handles variable substitution. Evaluators read the reference and rubric when needed. The builder checks that the selected expectations have their required criteria before creating the test.
 
 `Expectation` is a plain configuration record with these properties:
 
@@ -204,21 +211,24 @@ sequenceDiagram
     actor App as Application
     participant Runner as EvalRunner
     participant Provider as ModelProvider
+    participant Model
     participant Evaluator
     participant Generator as ReportGenerator
     participant Overall as OverallScoreEvaluator
 
     Note over App: Suite prepared through ITestCaseBuilder and ITestSuite
-    App->>Runner: run(suite, provider)
+    App->>Provider: getModel(modelName)
+    Provider-->>App: Model
+    App->>Runner: await run(suite, model)
     Note over Runner: Create EvalRun
     loop For each test in suite.tests
-        Runner->>Provider: generateResponse(test.prompt, test.variables)
-        Provider-->>Runner: output or execution error
+        Runner->>Model: await generateResponse(test.prompt, test.variables)
+        Model-->>Runner: output or execution error
         Note over Runner: Create EvalResult with testId and output or error
         opt Execution succeeded
             loop For each expectation in test.expectations
                 Note over Runner: Select evaluator by expectation.evaluatorType
-                Runner->>Evaluator: evaluate(test, output, expectation)
+                Runner->>Evaluator: await evaluate(test, output, expectation)
                 Evaluator-->>Runner: EvalScore or evaluation error
                 Note over Runner: Record expectation identity, threshold and pass/fail or error
                 Note over Runner: result.addScore(score), continue even after failure
@@ -235,7 +245,7 @@ sequenceDiagram
     Generator-->>App: IEvalReport
 ```
 
-`EvalRunner` owns the two loops. Evaluators receive the test definition, output and expectation, and return a score; they do not receive or modify an `EvalResult`. The runner records the expectation metadata and applies the threshold rule. Reporting consumes the recorded results without calling the provider or repeating individual evaluations.
+`EvalRunner` owns the two loops. Its public asynchronous `run` method iterates over tests and delegates each iteration to a private asynchronous `runTest` method. Evaluators receive the test definition, output and expectation, and return `Promise<EvalScore>`; they do not receive or modify an `EvalResult`. The runner awaits each evaluation, records the expectation metadata and applies the threshold rule. Rejected promises are isolated per expectation. Reporting consumes the recorded results without calling the model or repeating individual evaluations.
 
 ### Independent export
 
@@ -269,22 +279,27 @@ classDiagram
 
     class ModelProvider {
         <<interface>>
-        +generateResponse(prompt: String, variables: Map) String
+        +getModel(modelName: String) Model
+    }
+    class Model {
+        <<interface>>
+        +generateResponse(prompt: String, variables: Map) Promise~String~
     }
     class ProviderAdapter {
-        +generateResponse(prompt: String, variables: Map) String
+        +generateResponse(prompt: String, variables: Map) Promise~String~
     }
     class ProviderAPI {
         <<external>>
     }
-    ProviderAdapter ..|> ModelProvider : Adapter
+    ModelProvider ..> Model : supplies selected model
+    ProviderAdapter ..|> Model : Adapter
     ProviderAdapter --> ProviderAPI : calls SUT
 
     class EvalRunner
-    EvalRunner ..> ModelProvider : calls for each test
+    EvalRunner ..> Model : calls for each test
     class Evaluator {
         <<interface>>
-        +evaluate(test: ITestCase, output: String, expectation: Expectation) EvalScore
+        +evaluate(test: ITestCase, output: String, expectation: Expectation) Promise~EvalScore~
     }
     class ExactMatchEvaluator
     class SemanticSimilarityEvaluator
@@ -303,12 +318,14 @@ classDiagram
 ```
 
 - **Builder:** create a valid test before adding it to the suite. Optional setters are omitted; a suite needs no builder of its own.
-- **Adapter:** translate the external provider API into `ModelProvider`. The selected provider/model is the **SUT (System Under Test)**.
+- **Adapter:** translate the external provider API into `Model`, supplied by `ModelProvider`. The selected model is the **SUT (System Under Test)**. A provider selects a model; it does not forward generation calls.
 - **Strategy:** evaluator implementations vary the evaluation algorithm while the runner keeps the same loop. No factory or resolver class is needed.
 - **Overall strategy:** the report generator delegates the overall judgment to its configured strategy. Its concrete implementation and formula remain part of the exercise; raw scores with different scales cannot simply be averaged.
 
 ## Implementation boundaries
 
 Every TypeScript class and every Python domain class must explicitly implement the public contracts required by [AGENTS.md](../AGENTS.md). The table lists the core contracts; strategy and adapter contracts are shown in the pattern view. Plain records are data types. Both languages implement this same model.
+
+The [execution POC](../typescript/src/execution/plan.md) implements a TypeScript-only subset to validate the domain flow: test creation, sequential execution, asynchronous exact-match evaluation and recorded outcomes. Its deterministic provider/model is test support, not an external integration. Python parity and the remaining MVP capabilities are deferred until the experiment is accepted. The POC builder exposes only prompt, golden reference and expectation setters; variables default to an empty map and rubric is optional in the test contract.
 
 Database storage remains required for suites, tests, runs and results. The exporting subsystem owns JSON serialization through `ISuiteExporter`; HTTP delivery, file download, database details and accessors are outside this domain view.

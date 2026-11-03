@@ -1,14 +1,13 @@
 schema: spec-driven
 
 context: |
-  Questo progetto è un esercizio scolastico di programmazione a oggetti.
-  Ogni classe deve dichiarare e implementare esplicitamente una o più interfacce
-  TypeScript che ne rendano visibile il contratto pubblico, anche quando esiste
-  una sola implementazione.
-  Le classi del dominio Python dichiarano e implementano esplicitamente uno o
-  più contratti pubblici tramite Protocol, anche con una sola implementazione.
-  Le specifiche sono condivise; i task distinguono implementazione e verifica
-  TypeScript e Python, rendendo esplicite eventuali differenze di avanzamento.
+  This project is a school exercise in object-oriented programming.
+  Every TypeScript class must explicitly implement one or more interfaces
+  that expose its public contract, even when there is only one implementation.
+  Python domain classes must explicitly implement one or more public contracts
+  using Protocol, even when there is only one implementation.
+  Specifications are shared; tasks distinguish TypeScript and Python
+  implementation and verification, and make progress differences explicit.
 
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
