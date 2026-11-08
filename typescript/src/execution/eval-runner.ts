@@ -8,13 +8,14 @@ export interface IEvalRunner {
 }
 
 export class EvalRunner implements IEvalRunner {
-  constructor(private readonly evaluators: Readonly<Record<string, Evaluator>>) {}
+  constructor(private readonly evaluators: Readonly<Record<string, Evaluator>>) { }
 
   async run(suite: ITestSuite, model: Model): Promise<IEvalRun> {
     if (suite.tests.length === 0) throw new Error('Cannot run an empty suite.');
     const run = new EvalRun(suite.id, model.providerName, model.modelName);
     for (const test of suite.tests) {
-      run.addResult(await this.runTest(test, model));
+      const result = await this.runTest(test, model);
+      run.addResult(result);
     }
     return run;
   }
