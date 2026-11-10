@@ -21,14 +21,15 @@ export class EvalRunner implements IEvalRunner {
   }
 
   private async runTest(test: ITestCase, model: Model): Promise<IEvalResult> {
+    const prompt = test.prompt;
     let output: string;
     try {
-      output = await model.generateResponse(test.prompt, test.variables);
+      output = await model.generateResponse(prompt, test.variables);
     } catch (error) {
-      return new EvalResult(test.id, undefined, error instanceof Error ? error.message : String(error));
+      return new EvalResult(test.id, prompt, undefined, error instanceof Error ? error.message : String(error));
     }
 
-    const result = new EvalResult(test.id, output);
+    const result = new EvalResult(test.id, prompt, output);
     for (const expectation of test.expectations) {
       const metadata = {
         expectationId: expectation.id,
